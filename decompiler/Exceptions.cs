@@ -25,4 +25,16 @@ namespace decompiler.Exceptions
           System.Runtime.Serialization.SerializationInfo info,
           System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
     }
+
+
+    [Serializable]
+    public class RuleLoaderException : Exception
+    {
+        public RuleLoaderException() { }
+        public RuleLoaderException(string message) : base(message) { }
+        public RuleLoaderException(string message, Exception inner) : base(message, inner) { }
+        protected RuleLoaderException(
+          System.Runtime.Serialization.SerializationInfo info,
+          System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
+    }
 }
