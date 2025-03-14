@@ -29,15 +29,11 @@ namespace decompiler
         }
         private void convertBytesToReadable(byte[] sect)
         {
-            RuleLoader r = Decompiler.rLoader;
             for (int i = 0; i < sect.Length; i++)
             {
                 byte opcode = sect[i];
-                string opcodest = string.Empty;
-
-                
+                string opcodest = Decompiler.rLoader.Decode(sect, ref i);
                 Content += $@"{opcodest}\n";
-                log(opcodest);
             }
             log(Content[0]);
         }
@@ -49,10 +45,10 @@ namespace decompiler
         private Section[] sections;
         private CodeType codeType;
         private Thread[] decompilerThreads;
-        public static RuleLoader rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath, DecompileType type = DecompileType.ASM)
+        public static DecompilerRuleHandler rLoader;
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM)
         {
-            rLoader = new RuleLoader(ruleLocPath);
+            rLoader = new DecompilerRuleHandler(ruleLocPath);
             exeData = File.ReadAllBytes(toDecompilePath);
             // TODO: write code that decompiles .headers
             int peHeaderOffset = toInt32(exeData, 0x3C);
@@ -116,6 +112,10 @@ namespace decompiler
 
             // Wait for all tasks to complete
             Task.WhenAll(tasks).Wait();
+            foreach (byte invalidbyte in DecompilerRuleHandler.invalidOpCodeList)
+            {
+                log($@"Unregistered byte >> {invalidbyte}");
+            }
             return sectionList;
         }
     }

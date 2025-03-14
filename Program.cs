@@ -11,7 +11,7 @@ namespace decompiler
         static void Main(string[] args)
         {
             log("Hello, World!");
-            new Decompiler($"C:\\Users\\200123\\Documents\\GitHub\\networker\\bin\\Debug\\net8.0\\networker.exe");
+            new Decompiler($"C:\\Users\\thoma\\Documents\\GitHub\\networker\\bin\\Debug\\net8.0\\networker.exe");
         }
     }
 }
