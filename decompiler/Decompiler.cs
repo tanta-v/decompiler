@@ -5,7 +5,9 @@ using System.Text;
 using static decompiler.Utility;
 using Newtonsoft.Json;
 using System.Reflection;
+using System.Net.Http;
 using decompiler.DecompilerRules;
+using System.Text.RegularExpressions;
 namespace decompiler
 {
     public enum DecompileType
@@ -32,10 +34,10 @@ namespace decompiler
             for (int i = 0; i < sect.Length; i++)
             {
                 byte opcode = sect[i];
-                string opcodest = Decompiler.rLoader.Decode(sect, ref i);
-                Content += $@"{opcodest}\n";
+                //string opcodest = Decompiler.rLoader.Decode(sect, ref i);
+                //Content += $@"{opcodest}\n";
             }
-            log(Content[0]);
+            //log(Content[0]);
         }
     }
     public class Decompiler
@@ -45,10 +47,9 @@ namespace decompiler
         private Section[] sections;
         private CodeType codeType;
         private Thread[] decompilerThreads;
-        public static DecompilerRuleHandler rLoader;
+        //public static DecompilerRuleHandler rLoader;
         public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM)
         {
-            rLoader = new DecompilerRuleHandler(ruleLocPath);
             exeData = File.ReadAllBytes(toDecompilePath);
             // TODO: write code that decompiles .headers
             int peHeaderOffset = toInt32(exeData, 0x3C);
@@ -59,7 +60,8 @@ namespace decompiler
             ushort cType = toUInt16(exeData, peHeaderOffset + 4);
             if (cType == 0x8664) codeType = CodeType.x64; else codeType = CodeType.x32;
 
-
+            //rLoader = new DecompilerRuleHandler(codeType);
+            downloadCodeRules(codeType); // temp
             sections = readSections(exeData, peHeaderOffset);
         }
         private Section[] readSections(byte[] exedata, int peHeaderOffset)
@@ -112,11 +114,73 @@ namespace decompiler
 
             // Wait for all tasks to complete
             Task.WhenAll(tasks).Wait();
-            foreach (byte invalidbyte in DecompilerRuleHandler.invalidOpCodeList)
+            /*foreach (byte invalidbyte in DecompilerRuleHandler.invalidOpCodeList)
             {
                 log($@"Unregistered byte >> {invalidbyte}");
-            }
+            }*/
             return sectionList;
+        }
+
+
+
+        public static void downloadCodeRules(CodeType codeType)
+        {
+            string tagRip(string inp)
+            {
+                return Regex.Replace(inp, "<.*?>", string.Empty);
+            }
+            string url = @$"http://ref.x86asm.net/coder64.html";
+            string temppath = Path.Combine(Directory.GetCurrentDirectory(), "x64.coderules");
+
+            if (codeType == CodeType.x32) {
+                url = @$"http://ref.x86asm.net/coder32.html";
+                temppath = Path.Combine(Directory.GetCurrentDirectory(), "x32.coderules");
+            }
+            using (HttpClient clnt = new HttpClient())
+            {
+                log(@$"Downloading from {url}...");
+                string content = clnt.GetStringAsync(url).Result;
+                File.WriteAllText(temppath + ".part", content);
+                content = "";
+            }
+            List<DecompilerInstruction> decompilerInstList = new List<DecompilerInstruction>();
+            using (FileStream file = File.OpenRead(temppath + ".part"))
+            using (StreamReader srdr = new StreamReader(file))
+            {
+                string cline;
+                int stage = 0;
+                StringBuilder rst = new StringBuilder();
+                StringBuilder rst2 = new StringBuilder();
+                while ((cline = srdr.ReadLine()) != null)
+                {
+                    switch (stage)
+                    {
+                        case 0:
+                            if (cline.Contains("<table cellpadding=\"2\" rules=\"groups\" class=\"ref_table notpublic\"")) stage = 1;
+                            break;
+                        case 1:
+                            rst.Append(cline);
+                            if (cline.Contains("<div")) stage = 2;
+                            break;
+                        case 2:
+                            if (cline.Contains("two-byte")) stage = 3;
+                            break;
+                        case 3:
+                            rst2.Append(cline);
+                            if (cline.Contains("</table>")) stage = 4;
+                            break;
+                    }
+                }
+                string[] st = rst.ToString().Split("<TBODY id=\"");
+                
+                Parallel.For(1, st.Length, i =>
+                {
+                    string[] a = st[i].ToLower().Split("<td>");
+                    decompilerInstList.Add(new DecompilerInstruction(
+                            
+                        ))
+                });
+            }
         }
     }
 }
