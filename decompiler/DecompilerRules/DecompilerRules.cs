@@ -8,8 +8,8 @@ namespace decompiler.DecompilerRules
 {
     public class DecompilerInstruction
     {
-        public required string PrimaryOpcode { get; set; } // Required
-        public required string InstructionMnemonic { get; set; } // Required
+        public string PrimaryOpcode { get; set; } // Required
+        public string InstructionMnemonic { get; set; } // Required
         public string? Prefix { get; set; }
 
         public string? Prefix0F { get; set; }
@@ -31,11 +31,12 @@ namespace decompiler.DecompilerRules
         public string? UndefinedFlags { get; set; }
         public string? FlagsValues { get; set; }
         public string? DescriptionNotes { get; set; }
-        public DecompilerInstruction(string prefix, string primaryOpcode, string instructionMnemonic, string? prefix0F, string? secondaryOpcode, string? registerOpcodeField, string? processor, string? documentationStatus, string? modeOfOperation, string? ringLevel, string? lockPrefixFPU, string? operand1, string? operand2, string? operand3, string? operand4, string? instructionExtensionGroup, string? testedFlags, string? modifiedFlags, string? definedFlags, string? undefinedFlags, string? flagsValues, string? descriptionNotes)
+        public DecompilerInstruction(
+            string primaryOpcode, string instructionMnemonic, string? prefix = null, string? prefix0F = null, string? secondaryOpcode = null, string? registerOpcodeField = null, string? processor = null, string? documentationStatus = null, string? modeOfOperation = null, string? ringLevel = null, string? lockPrefixFPU = null, string? operand1 = null, string? operand2 = null, string? operand3 = null, string? operand4 = null, string? instructionExtensionGroup = null, string? testedFlags = null, string? modifiedFlags = null, string? definedFlags = null, string? undefinedFlags = null, string? flagsValues = null, string? descriptionNotes = null)
         {
-            Prefix = prefix;
             PrimaryOpcode = primaryOpcode;
             InstructionMnemonic = instructionMnemonic;
+            Prefix = prefix;
             Prefix0F = prefix0F;
             SecondaryOpcode = secondaryOpcode;
             RegisterOpcodeField = registerOpcodeField;
@@ -58,7 +59,4 @@ namespace decompiler.DecompilerRules
         }
     }
 
-    class DecompilerRules
-    {
-    }
 }
