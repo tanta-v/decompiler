@@ -10,9 +10,8 @@ using decompiler.DecompilerRules;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using System.Collections.Concurrent;
-using Gee.External.Capstone;
-using Gee.External.Capstone.Arm64;
-using Gee.External.Capstone.X86;
+using System.Reflection.Emit;
+using SharpDisasm;
 namespace decompiler
 {
     public enum DecompileType
@@ -22,7 +21,7 @@ namespace decompiler
     public enum DecompileMethod
     {
         NATIVE,
-        CAPSTONE
+        SHARP
     }
     public enum CodeType
     {
@@ -292,7 +291,7 @@ namespace decompiler
         public DecompileMethod decompileMethod;
         public List<object> exeInstructionList;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.CAPSTONE)
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.SHARP)
         {
             exeInstructionList = new List<object>();
             exeData = File.ReadAllBytes(toDecompilePath);
@@ -307,24 +306,27 @@ namespace decompiler
 
             switch (method)
             {
-                case DecompileMethod.NATIVE: // honestly, kinda gave up on this. Problem is, I'd rather be doing anything else. Probably **technically** usable, but good luck.
+                case DecompileMethod.NATIVE: // honestly, kinda gave up on this. Problem is, I'd rather be doing anything else. Probably **technically** usable, but good luck. Almost a second faster, though.
                     
                     //rLoader = new DecompilerRuleHandler(codeType);
                     downloadCodeRules(codeType); // insures code decompiler actually has access to the byte = mnemonic conversion that this app is designed to run
                     sections = readSections(exeData, peHeaderOffset);
                     break;
-                case DecompileMethod.CAPSTONE:
-                    switch (codeType)
-                    {
-                        case CodeType.x64:
-                            CapstoneX86Disassembler disassembler = new CapstoneX86Disassembler(X86DisassembleMode.Bit64);
-                            foreach (X86Instruction item in disassembler.Disassemble(exeData))
-                            {
-                                exeInstructionList.Append(item);
-                                log(@$"{item.Mnemonic} {item.Operand} @{item.Address}");
-                            }
-                            break;
-                    }
+                case DecompileMethod.SHARP:
+                    // Determine the architecture mode or us 32-bit by default
+                    ArchitectureMode mode = ArchitectureMode.x86_32;
+                    
+                    // Configure the translator to output instruction addresses and instruction binary as hex
+                    Disassembler.Translator.IncludeAddress = true;
+                    Disassembler.Translator.IncludeBinary = true;
+
+                    // Create the disassembler
+                    var disasm = new Disassembler(
+                        exeData,
+                        mode, 0, true);
+                    // Disassemble each instruction and output to console
+                    foreach (var insn in disasm.Disassemble())
+                        Console.Out.WriteLine(insn.ToString());
                     break;
             }
         }
