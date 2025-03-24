@@ -12,6 +12,7 @@ using HtmlAgilityPack;
 using System.Collections.Concurrent;
 using System.Reflection.Emit;
 using SharpDisasm;
+using System.Xml.Linq;
 namespace decompiler
 {
     public enum DecompileType
@@ -291,10 +292,19 @@ namespace decompiler
         public DecompileMethod decompileMethod;
         public List<object> exeInstructionList;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.SHARP)
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false, int loadExeDataFromFileBufferSize = 8096)
         {
             exeInstructionList = new List<object>();
-            exeData = File.ReadAllBytes(toDecompilePath);
+            if (loadExeDataToMemory)
+                exeData = File.ReadAllBytes(toDecompilePath);
+            else
+            {
+                using (FileStream ftmp = new FileStream(toDecompilePath, FileMode.Open, FileAccess.Read))
+                {
+                    exeData = new byte[1024];
+                    if (ftmp.Read(exeData, 0, 1024) == 0) throw new RuleLoaderException();
+                }
+            }
             // TODO: write code that decompiles .headers
             int peHeaderOffset = toInt32(exeData, 0x3C);
             string peSig = Encoding.UTF8.GetString(exeData, peHeaderOffset, 4);
@@ -306,16 +316,17 @@ namespace decompiler
 
             switch (method)
             {
-                case DecompileMethod.NATIVE: // honestly, kinda gave up on this. Problem is, I'd rather be doing anything else. Probably **technically** usable, but good luck. Almost a second faster, though.
-                    
-                    //rLoader = new DecompilerRuleHandler(codeType);
+                case DecompileMethod.NATIVE: // honestly, kinda gave up on this. Probably **technically** usable, but good luck. Almost a second faster, though.
                     downloadCodeRules(codeType); // insures code decompiler actually has access to the byte = mnemonic conversion that this app is designed to run
-                    sections = readSections(exeData, peHeaderOffset);
+                    if (loadExeDataToMemory) 
+                        sections = readSections(exeData, peHeaderOffset); 
+                    else
+                        sections = readSectionsNoExcessiveMemoryUsage(toDecompilePath, peHeaderOffset, loadExeDataFromFileBufferSize);
                     break;
                 case DecompileMethod.SHARP:
                     // Determine the architecture mode or us 32-bit by default
                     ArchitectureMode mode = ArchitectureMode.x86_32;
-                    
+                    if (cType == 0x8664) mode = ArchitectureMode.x86_64;
                     // Configure the translator to output instruction addresses and instruction binary as hex
                     Disassembler.Translator.IncludeAddress = true;
                     Disassembler.Translator.IncludeBinary = true;
@@ -326,8 +337,38 @@ namespace decompiler
                         mode, 0, true);
                     // Disassemble each instruction and output to console
                     foreach (var insn in disasm.Disassemble())
-                        Console.Out.WriteLine(insn.ToString());
+                        log(insn.ToString());
                     break;
+            }
+        }
+        private Section[] readSectionsNoExcessiveMemoryUsage(string filePath, int peHeaderOffset, int bufferSize)
+        {
+            using (FileStream fvar = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            {
+                byte[] buffer = new byte[bufferSize];
+                int head = peHeaderOffset + 24 + (codeType == CodeType.x32 ? 224 : 240);
+                byte[] peHeader = new byte[head];
+                fvar.Read(peHeader, peHeaderOffset, peHeader.Length);
+
+                int nOSections = toInt16(peHeader, peHeaderOffset + 6);
+                ConcurrentBag<Section> sectionBag = [];
+
+                Task[] sectionTask = new Task[nOSections];
+                for (int i = 0; i < nOSections; i++)
+                {
+                    if (fvar.Read(buffer, head, buffer.Length) == 0) throw new InvalidPeHeaderOffsetException();
+                    int index = i;
+                    sectionTask[i] = Task.Run(() =>
+                    {
+                        int sectOffst = head + index * 40;
+                        string sectionName = getStringAscii(buffer, sectOffst, 8).Trim('\0');
+                    });
+                }
+                while (true)
+                {
+                    if (fvar.Read(buffer, peHeaderOffset, bufferSize) == 0) break;
+                }
+                return sectionBag.ToArray();
             }
         }
         private Section[] readSections(byte[] exedata, int peHeaderOffset)
