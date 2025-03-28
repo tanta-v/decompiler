@@ -5,23 +5,23 @@ namespace decompiler.Exceptions
 {
 
     [Serializable]
-    public class InvalidPeHeaderOffsetException : Exception
+    public class InvalidPeHeaderException : Exception
     {
-        public InvalidPeHeaderOffsetException() { }
-        public InvalidPeHeaderOffsetException(string message) : base(message) { }
-        public InvalidPeHeaderOffsetException(string message, Exception inner) : base(message, inner) { }
-        protected InvalidPeHeaderOffsetException(
+        public InvalidPeHeaderException() { }
+        public InvalidPeHeaderException(string message) : base(message) { }
+        public InvalidPeHeaderException(string message, Exception inner) : base(message, inner) { }
+        protected InvalidPeHeaderException(
           System.Runtime.Serialization.SerializationInfo info,
           System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
     }
 
     [Serializable]
-    public class UnableToGetSectionsException : Exception
+    public class SectionReaderException : Exception
     {
-        public UnableToGetSectionsException() { }
-        public UnableToGetSectionsException(string message) : base(message) { }
-        public UnableToGetSectionsException(string message, Exception inner) : base(message, inner) { }
-        protected UnableToGetSectionsException(
+        public SectionReaderException() { }
+        public SectionReaderException(string message) : base(message) { }
+        public SectionReaderException(string message, Exception inner) : base(message, inner) { }
+        protected SectionReaderException(
           System.Runtime.Serialization.SerializationInfo info,
           System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
     }

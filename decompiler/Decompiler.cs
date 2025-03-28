@@ -35,14 +35,24 @@ namespace decompiler
         public string Content;
         public int invalidOpCodeNum;
         public List<byte> invalidOpCodes;
+        public Section(string name, int codeSectionOffset = 0, int codeSize = 0)
+        {
+            Name = name;
+            invalidOpCodes = new List<byte>();
+            invalidOpCodeNum = 0;
+            Content = string.Empty;
+            convertBytesToReadableStream(Decompiler.filePath, codeSectionOffset, codeSize);
+        }
         public Section(string name, byte[] content)
         {
             Name = name;
             invalidOpCodes = new List<byte>();
             invalidOpCodeNum = 0;
             Content = string.Empty;
-            convertBytesToReadable(content);
+            convertBytesToReadable(content!);
+            
         }
+
         private void convertBytesToReadable(byte[] sect)
         {
             var contentBag = new ConcurrentBag<string>();
@@ -65,41 +75,82 @@ namespace decompiler
                     if (j >= sect.Length) break;
 
                     byte opcode = sect[j];
-                    DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst =>
-                        inst.PrimaryOpcode == opcode.ToString("X2"));
-
-                    if (instruction != null)
+                    // Check for two-byte instructions (e.g., 0x0F as a prefix)
+                    if (opcode == 0x0F && j + 1 < sect.Length)
                     {
-                        StringBuilder operands = new StringBuilder();
+                        byte nextOpcode = sect[j + 1];
+                        string combinedOpcode = $"{opcode:X2}{nextOpcode:X2}";
+                        DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst =>
+                            inst.PrimaryOpcode == combinedOpcode);
 
-                        if (!string.IsNullOrEmpty(instruction.Operand1) && j + 1 < sect.Length)
+                        if (instruction != null)
                         {
-                            operands.Append(FormatOperand(instruction.Operand1, sect[j + 1], j));
-                            j++;
-                        }
+                            StringBuilder operands = new StringBuilder();
+                            if (!string.IsNullOrEmpty(instruction.Operand1) && j + 2 < sect.Length)
+                            {
+                                operands.Append(FormatOperand(instruction.Operand1, sect[j + 2], j));
+                                j++;
+                            }
 
-                        if (!string.IsNullOrEmpty(instruction.Operand2) && j + 1 < sect.Length)
+                            if (!string.IsNullOrEmpty(instruction.Operand2) && j + 2 < sect.Length)
+                            {
+                                if (operands.Length > 0) operands.Append(", ");
+                                operands.Append(FormatOperand(instruction.Operand2, sect[j + 2], j));
+                                j++;
+                            }
+
+                            string instructionText = $"{instruction.InstructionMnemonic} {operands.ToString()}\n";
+                            contentBag.Add(instructionText);
+                            log(instructionText);
+                        }
+                        else // Handle invalid two-byte opcode
                         {
-                            if (operands.Length > 0) operands.Append(", ");
-                            operands.Append(FormatOperand(instruction.Operand2, sect[j + 1], j));
-                            j++;
-                        }
+                            string invalidText = $"DB 0x{opcode:X2}{nextOpcode:X2}\n";
+                            contentBag.Add(invalidText);
+                            log(invalidText);
 
-                        string instructionText = $"{instruction.InstructionMnemonic} {operands.ToString()}\n";
-                        contentBag.Add(instructionText);
-                        log(instructionText);
+                            invalidOpCodeNumBag.Add(1);
+                            invalidOpCodesBag.Add(opcode);
+                        }
+                        j++; // Skip the next byte after processing the two-byte instruction
                     }
                     else
                     {
-                        string invalidText = $"DB 0x{opcode:X2}\n";
-                        contentBag.Add(invalidText);
-                        log(invalidText);
+                        // Handle single-byte instructions
+                        DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst =>
+                            inst.PrimaryOpcode == opcode.ToString("X2"));
 
-                        invalidOpCodeNumBag.Add(1);
-                        invalidOpCodesBag.Add(opcode);
+                        if (instruction != null)
+                        {
+                            StringBuilder operands = new StringBuilder();
+                            if (!string.IsNullOrEmpty(instruction.Operand1) && j + 1 < sect.Length)
+                            {
+                                operands.Append(FormatOperand(instruction.Operand1, sect[j + 1], j));
+                                j++;
+                            }
+
+                            if (!string.IsNullOrEmpty(instruction.Operand2) && j + 1 < sect.Length)
+                            {
+                                if (operands.Length > 0) operands.Append(", ");
+                                operands.Append(FormatOperand(instruction.Operand2, sect[j + 1], j));
+                                j++;
+                            }
+
+                            string instructionText = $"{instruction.InstructionMnemonic} {operands.ToString()}\n";
+                            contentBag.Add(instructionText);
+                            log(instructionText);
+                        }
+                        else // Handle invalid single-byte opcode
+                        {
+                            string invalidText = $"DB 0x{opcode:X2}\n";
+                            contentBag.Add(invalidText);
+                            log(invalidText);
+
+                            invalidOpCodeNumBag.Add(1);
+                            invalidOpCodesBag.Add(opcode);
+                        }
                     }
 
-                    // **Check Next Bytes for String or Instruction**
                     // Check if the next bytes represent a valid instruction
                     bool isInstruction = false;
 
@@ -160,11 +211,161 @@ namespace decompiler
             invalidOpCodes = invalidOpCodesBag.ToList();
             log(string.Join("\n", stringBag));
         }
+        private void convertBytesToReadableStream(string filePath, int codeSectionOffset, int codeSize)
+        {
+            var contentBag = new ConcurrentBag<string>(); // Stores all instructions and opcodes
+            var invalidOpCodesBag = new ConcurrentBag<byte>(); // Stores invalid opcodes
+            var invalidOpCodeNumBag = new ConcurrentBag<int>(); // Stores count of invalid opcodes
+            var stringBag = new ConcurrentBag<string>(); // Stores extracted strings
+
+            StringBuilder asciiBuilder = new StringBuilder(); // Builds ASCII strings
+            StringBuilder unicodeBuilder = new StringBuilder(); // Builds Unicode strings
+
+            int fileChunkSize = Decompiler.fileChunkSize;
+            if (codeSectionOffset == 0) throw new SectionReaderException("Invalid section-code offset.");
+            if (codeSize == 0) throw new SectionReaderException("Invalid section-code size.");
+
+            using (FileStream OStrm = new(filePath, FileMode.Open, FileAccess.Read))
+            {
+                int nOChunks = codeSize / fileChunkSize;
+                OStrm.Seek(codeSectionOffset, SeekOrigin.Begin);
+
+                byte[] chunkBuffer = new byte[fileChunkSize * 2]; // Double-sized buffer: [chunk1][chunk2]
+                byte[] chunkR = new byte[fileChunkSize];
+                int currentChunk = 0;
+                int currentChunkOffset = 0; // Keeps track of the position to insert new chunk
+                while (currentChunk < nOChunks)
+                {
+                    try { OStrm.Read(chunkR, currentChunk * fileChunkSize, fileChunkSize); }
+                    catch (Exception e) { break; }
+
+                    if (currentChunkOffset == 0) // Starting fresh with the first chunk
+                    {
+                        Array.Copy(chunkR, 0, chunkBuffer, currentChunkOffset, fileChunkSize);
+                        currentChunkOffset = fileChunkSize; // Update offset
+                    }
+                    else // Shift the content of chunkBuffer left by fileChunkSize
+                    {
+                        Array.Copy(chunkBuffer, fileChunkSize, chunkBuffer, 0, fileChunkSize);
+                        Array.Copy(chunkR, 0, chunkBuffer, fileChunkSize, fileChunkSize);
+                    }
+
+                    for (int byt = 0; byt < chunkBuffer.Length; byt++) // Process bytes in chunkBuffer
+                    {
+                        byte opcode = chunkBuffer[byt];
+
+                        if (opcode == 0x0F && byt + 1 < chunkBuffer.Length) // Two-byte instruction check
+                        {
+                            byte nextOpcode = chunkBuffer[byt + 1];
+                            string combinedOpcode = $"{opcode:X2}{nextOpcode:X2}";
+                            DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == combinedOpcode);
+
+                            if (instruction != null)
+                            {
+                                StringBuilder operands = new StringBuilder();
+                                if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 2 < chunkBuffer.Length)
+                                {
+                                    operands.Append(FormatOperand(instruction.Operand1, chunkBuffer[byt + 2], byt));
+                                    byt++;
+                                }
+                                if (!string.IsNullOrEmpty(instruction.Operand2) && byt + 2 < chunkBuffer.Length)
+                                {
+                                    if (operands.Length > 0) operands.Append(", ");
+                                    operands.Append(FormatOperand(instruction.Operand2, chunkBuffer[byt + 2], byt));
+                                    byt++;
+                                }
+
+                                contentBag.Add($"{instruction.InstructionMnemonic} {operands.ToString()}\n");
+                            }
+                            else // Handle invalid opcode
+                            {
+                                contentBag.Add($"DB 0x{opcode:X2}{nextOpcode:X2}\n");
+                                invalidOpCodeNumBag.Add(1);
+                                invalidOpCodesBag.Add(opcode);
+                            }
+                            byt++; // Skip the next byte for two-byte instruction
+                        }
+                        else // Handle single-byte instructions
+                        {
+                            DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == opcode.ToString("X2"));
+                            if (instruction != null)
+                            {
+                                StringBuilder operands = new StringBuilder();
+                                if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 1 < chunkBuffer.Length)
+                                {
+                                    operands.Append(FormatOperand(instruction.Operand1, chunkBuffer[byt + 1], byt));
+                                    byt++;
+                                }
+                                if (!string.IsNullOrEmpty(instruction.Operand2) && byt + 1 < chunkBuffer.Length)
+                                {
+                                    if (operands.Length > 0) operands.Append(", ");
+                                    operands.Append(FormatOperand(instruction.Operand2, chunkBuffer[byt + 1], byt));
+                                    byt++;
+                                }
+
+                                contentBag.Add($"{instruction.InstructionMnemonic} {operands.ToString()}\n");
+                            }
+                            else // Handle invalid opcodes
+                            {
+                                contentBag.Add($"DB 0x{opcode:X2}\n");
+                                invalidOpCodeNumBag.Add(1);
+                                invalidOpCodesBag.Add(opcode);
+                            }
+                        }
+
+                        bool isInstruction = false;
+                        if (byt + 1 < chunkBuffer.Length)
+                        {
+                            byte nextOpcode = chunkBuffer[byt + 1];
+                            DecompilerInstruction? nextInstruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == nextOpcode.ToString("X2"));
+                            byt++;
+                            if (nextInstruction != null) isInstruction = true;
+                        }
+
+                        // ASCII and Unicode string extraction logic
+                        if (!isInstruction)
+                        {
+                            if (opcode >= 0x20 && opcode <= 0x7E) asciiBuilder.Append((char)opcode);
+                            else
+                            {
+                                if (asciiBuilder.Length >= 4)
+                                {
+                                    string foundString = asciiBuilder.ToString();
+                                    stringBag.Add(foundString);
+                                    log($"Extracted String: {foundString}");
+                                }
+                                asciiBuilder.Clear();
+                            }
+
+                            if (byt < chunkBuffer.Length - 1 && opcode >= 0x20 && opcode <= 0x7E && chunkBuffer[byt + 1] == 0x00)
+                            {
+                                unicodeBuilder.Append((char)opcode);
+                                byt++;
+                            }
+                            else
+                            {
+                                if (unicodeBuilder.Length >= 4)
+                                {
+                                    string foundString = unicodeBuilder.ToString();
+                                    stringBag.Add(foundString);
+                                    log($"Extracted Unicode String: {foundString}");
+                                }
+                                unicodeBuilder.Clear();
+                            }
+                        }
+                    }
+
+                    currentChunk++; // Move to the next chunk
+                }
+            }
+            Content = string.Join("", contentBag); // Combine all content into the final output
+        }
+
 
 
         private string FormatOperand(string operandType, ushort operandValue, int currentIndex)
         {
-            switch (operandType)
+            switch (operandType.ToLower()) // Convert operandType to lowercase
             {
                 case "m8":
                 case "r/m8":
@@ -172,8 +373,11 @@ namespace decompiler
                 case "r/m32":
                 case "r/m64":
                 case "r/m16/32/64":
+                case "r/m16/32":
                     return $"[0x{operandValue:X2}]";  // Memory address representation
+
                 case "m":
+                case "m16":
                 case "m48":
                 case "m80":
                     return $"{operandType} 0x{operandValue:X2}";  // Memory operand for descriptor tables
@@ -191,30 +395,29 @@ namespace decompiler
                 case "imm16/32/64":
                     return $"0x{operandValue:X8}";  // Immediate 16/32/64-bit value
 
-                case "eFlags":
-                case "Flags":
-                case "rBP":
-                case "rDX":
-                case "GS":
-                case "FS":
-                case "SS":
-                case "EAX":
+                case "eflags":
+                case "flags":
+                case "rbp":
+                case "rdx":
+                case "gs":
+                case "fs":
+                case "ss":
+                case "eax":
                 case "r32/64":
                 case "r16/32/64":
-                case "rAX":
-                case "rCX":
-                case "ECX":
-                case "RCX":
-                case "R11":
-                case "CL":
-                case "AL":
-                case "AH":
-                case "IA32_BIOS_SIG":
-                case "GDTR":
-                case "LDTR":
-                case "CRn":
-                case "DRn":
-                case "MSR":
+                case "rax":
+                case "rcx":
+                case "ecx":
+                case "r11":
+                case "cl":
+                case "al":
+                case "ah":
+                case "ia32_bios_sig":
+                case "gdtr":
+                case "ldtr":
+                case "crn":
+                case "drn":
+                case "msr":
                     return operandType;  // Special registers and flags
 
                 case "mm":
@@ -236,8 +439,8 @@ namespace decompiler
                 case "m128":
                     return $"m128 0x{operandValue:X2}";  // 128-bit memory
 
-                case "ST":
-                case "STi/m32real":
+                case "st":
+                case "sti/m32real":
                     return $"{operandType} 0x{operandValue:X2}";  // ST register or m32 real
 
                 case "m32real":
@@ -246,6 +449,7 @@ namespace decompiler
                 case "r/m":
                     return $"r/m 0x{operandValue:X2}";  // General r/m format
 
+                case "r64":
                 case "r":
                     return $"r 0x{operandValue:X2}";  // General register
 
@@ -264,6 +468,9 @@ namespace decompiler
                 case "m64real":
                     return $"m64real 0x{operandValue:X8}";  // Memory 64-bit real
 
+                case "dx":
+                    return $"dx 0x{operandValue:X4}";  // DX register operand, assuming it's 16-bit in this context
+
                 case "m16/32/64":
                     return $"m{operandValue:X2}";  // General memory operand
 
@@ -273,9 +480,19 @@ namespace decompiler
                 case "moffs8":
                     return $"moffs8 0x{operandValue:X2}";  // 8-bit memory offset
 
+                case "CR0": 
+                    return $"CR0 0x{operandValue:X4}"; // Control register 0
+
+                case "xmm/m64":
+                    return $"xmm/m64 0x{operandValue:X2}";  // xmm or m64 register
+
+                case "m32int":
+                    return $"m32int 0x{operandValue:X4}";  // Memory 32-bit integer
+
                 default:
                     return $"Unknown Operand Format: {operandType}, Value: 0x{operandValue:X2}";
             }
+
         }
 
 
@@ -288,13 +505,17 @@ namespace decompiler
         private Section[] sections;
         private CodeType codeType;
         private Thread[] decompilerThreads;
-        public static List<DecompilerInstruction> instructionList;
         public DecompileMethod decompileMethod;
         public List<object> exeInstructionList;
+
+        public static List<DecompilerInstruction> instructionList;
+        public static string filePath;
+        public static int fileChunkSize = 8192;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false, int loadExeDataFromFileBufferSize = 8096)
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false)
         {
             exeInstructionList = new List<object>();
+            filePath = toDecompilePath;
             if (loadExeDataToMemory)
                 exeData = File.ReadAllBytes(toDecompilePath);
             else
@@ -308,7 +529,7 @@ namespace decompiler
             // TODO: write code that decompiles .headers
             int peHeaderOffset = toInt32(exeData, 0x3C);
             string peSig = Encoding.UTF8.GetString(exeData, peHeaderOffset, 4);
-            if (peSig != "PE\0\0") throw new InvalidPeHeaderOffsetException(); // invalid pe header offset exception..
+            if (peSig != "PE\0\0") throw new InvalidPeHeaderException(); // invalid pe header offset exception..
             log($@"PeHeaderSig @ 0x{peHeaderOffset.ToString("X")} >> {peSig}");
 
             ushort cType = toUInt16(exeData, peHeaderOffset + 4);
@@ -316,12 +537,12 @@ namespace decompiler
 
             switch (method)
             {
-                case DecompileMethod.NATIVE: // honestly, kinda gave up on this. Probably **technically** usable, but good luck. Almost a second faster, though.
-                    downloadCodeRules(codeType); // insures code decompiler actually has access to the byte = mnemonic conversion that this app is designed to run
+                case DecompileMethod.NATIVE: // Faster, less consistent.
+                    downloadCodeRules(codeType); // ensures code decompiler actually has access to the byte = mnemonic conversion that this app is designed to run
                     if (loadExeDataToMemory) 
                         sections = readSections(exeData, peHeaderOffset); 
                     else
-                        sections = readSectionsNoExcessiveMemoryUsage(toDecompilePath, peHeaderOffset, loadExeDataFromFileBufferSize);
+                        sections = readSectionsStream(toDecompilePath, peHeaderOffset);
                     break;
                 case DecompileMethod.SHARP:
                     // Determine the architecture mode or us 32-bit by default
@@ -335,42 +556,50 @@ namespace decompiler
                     var disasm = new Disassembler(
                         exeData,
                         mode, 0, true);
-                    // Disassemble each instruction and output to console
+                    // Disassemble each instruction and output to console. gotta map this to my Section type
                     foreach (var insn in disasm.Disassemble())
                         log(insn.ToString());
                     break;
             }
         }
-        private Section[] readSectionsNoExcessiveMemoryUsage(string filePath, int peHeaderOffset, int bufferSize)
+        private Section[] readSectionsStream(string filePath, int peHeaderOffset)
         {
-            using (FileStream fvar = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            using (FileStream mainstream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             {
-                byte[] buffer = new byte[bufferSize];
                 int head = peHeaderOffset + 24 + (codeType == CodeType.x32 ? 224 : 240);
                 byte[] peHeader = new byte[head];
-                fvar.Read(peHeader, peHeaderOffset, peHeader.Length);
+                mainstream.Read(peHeader, 0, head);
 
                 int nOSections = toInt16(peHeader, peHeaderOffset + 6);
-                ConcurrentBag<Section> sectionBag = [];
-
+                ConcurrentBag<Section> sectionBag = new ConcurrentBag<Section>();
+                log($"{nOSections} section headers detected..");
                 Task[] sectionTask = new Task[nOSections];
                 for (int i = 0; i < nOSections; i++)
                 {
-                    if (fvar.Read(buffer, head, buffer.Length) == 0) throw new InvalidPeHeaderOffsetException();
                     int index = i;
                     sectionTask[i] = Task.Run(() =>
                     {
-                        int sectOffst = head + index * 40;
-                        string sectionName = getStringAscii(buffer, sectOffst, 8).Trim('\0');
+                        byte[] sBuffer = new byte[40];
+                        lock (mainstream) // Ensure thread-safe access to FileStream
+                        {
+                            mainstream.Seek(head + index * 40, SeekOrigin.Begin);
+                            if (mainstream.Read(sBuffer, 0, 40) < 40) throw new InvalidPeHeaderException();
+                        }
+                        string sectionName = getStringAscii(sBuffer, 0, 8).Trim('\0');
+                        log($@"SectionName found @ {head + index * 40} >> {sectionName}");
+
+                        int codeSectionOffset = toInt32(sBuffer, 12);
+                        int codeSectionSize = toInt32(sBuffer, 16);
+                        log($@"CodeSection offset @ 0x{codeSectionOffset} {sectionName} with a size of 0x{codeSectionSize}");
+
+                        sectionBag.Add(new Section(sectionName, codeSectionOffset, codeSectionSize)); // we pass null because its going to read from file
                     });
                 }
-                while (true)
-                {
-                    if (fvar.Read(buffer, peHeaderOffset, bufferSize) == 0) break;
-                }
+                Task.WaitAll(sectionTask);
                 return sectionBag.ToArray();
             }
         }
+
         private Section[] readSections(byte[] exedata, int peHeaderOffset)
         {
             int numOfSections = toInt16(exedata, peHeaderOffset + 6);
@@ -420,10 +649,11 @@ namespace decompiler
             }
 
             Task.WhenAll(tasks).Wait();
+            
             return sectionList;
         }
 
-
+        public Section getSection(string name) => sections.Where<Section>(i => i.Name == name).ToList()[0];
 
         public static void downloadCodeRules(CodeType codeType) // i just absolutely despise html 
         {
