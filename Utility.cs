@@ -17,5 +17,9 @@ namespace decompiler
         public static string getStringAscii(byte[] value) => Encoding.UTF8.GetString(value);
         public static string getString(byte[] value, int offset, int count) => Encoding.UTF8.GetString(value, offset, count);
         public static string getStringAscii(byte[] value, int offset, int count) => Encoding.ASCII.GetString(value, offset, count);
+        public static byte[] getBytesUTF8(string text)
+        {
+            return Encoding.UTF8.GetBytes(text);
+        }
     }
 }

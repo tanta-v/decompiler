@@ -11,31 +11,30 @@ using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using System.Collections.Concurrent;
 using System.Reflection.Emit;
-using SharpDisasm;
 using System.Xml.Linq;
 namespace decompiler
 {
     public enum DecompileType
     {
-        ASM
+        ASM,
+        kernelSYS
     }
     public enum DecompileMethod
     {
-        NATIVE,
-        SHARP
+        NATIVE
     }
     public enum CodeType
     {
         x32,
         x64
     }
-    public class Section
+    public class peSection
     {
         public string Name;
         public string Content;
         public int invalidOpCodeNum;
         public List<byte> invalidOpCodes;
-        public Section(string name, int codeSectionOffset = 0, int codeSize = 0)
+        public peSection(string name, int codeSectionOffset = 0, int codeSize = 0)
         {
             Name = name;
             invalidOpCodes = new List<byte>();
@@ -43,7 +42,7 @@ namespace decompiler
             Content = string.Empty;
             convertBytesToReadableStream(Decompiler.filePath, codeSectionOffset, codeSize);
         }
-        public Section(string name, byte[] content)
+        public peSection(string name, byte[] content)
         {
             Name = name;
             invalidOpCodes = new List<byte>();
@@ -52,7 +51,7 @@ namespace decompiler
             convertBytesToReadable(content!);
             
         }
-        public Section(string name, string content)
+        public peSection(string name, string content)
         {
             Name = name;
             Content = content;
@@ -68,6 +67,7 @@ namespace decompiler
             StringBuilder unicodeBuilder = new StringBuilder();
 
             int chunkSize = sect.Length / 4;
+            int sldtCount = 0;
 
             Parallel.For(0, 4, i =>
             {
@@ -105,7 +105,6 @@ namespace decompiler
 
                             string instructionText = $"{instruction.InstructionMnemonic} {operands.ToString()}\n";
                             contentBag.Add(instructionText);
-                            log(instructionText);
                         }
                         else // Handle invalid two-byte opcode
                         {
@@ -140,9 +139,13 @@ namespace decompiler
                                 j++;
                             }
 
-                            string instructionText = $"{instruction.InstructionMnemonic} {operands.ToString()}\n";
+                            string instructionText = $"{instruction.InstructionMnemonic} {operands}\n";
                             contentBag.Add(instructionText);
-                            log(instructionText);
+
+                            if (instruction.InstructionMnemonic == "SLDT" && operands.ToString().Contains("m16 0x00")) 
+                            {
+                                sldtCount++;
+                            }
                         }
                         else // Handle invalid single-byte opcode
                         {
@@ -208,7 +211,7 @@ namespace decompiler
                     }
                 }
             });
-
+            log(@$"{sldtCount} counts of sldt. {Name}");
             // Merge results
             Content = string.Join("", contentBag);
             invalidOpCodeNum = invalidOpCodeNumBag.Count;
@@ -228,7 +231,7 @@ namespace decompiler
             int fileChunkSize = Decompiler.fileChunkSize;
             if (codeSectionOffset == 0) throw new SectionReaderException("Invalid section-code offset.");
             if (codeSize == 0) throw new SectionReaderException("Invalid section-code size.");
-
+            int sldtCount = 0;
             using (FileStream OStrm = new(filePath, FileMode.Open, FileAccess.Read))
             {
                 int nOChunks = codeSize / fileChunkSize;
@@ -238,6 +241,7 @@ namespace decompiler
                 byte[] chunkR = new byte[fileChunkSize];
                 int currentChunk = 0;
                 int currentChunkOffset = 0; // Keeps track of the position to insert new chunk
+                
                 while (currentChunk < nOChunks)
                 {
                     try { OStrm.Read(chunkR, currentChunk * fileChunkSize, fileChunkSize); }
@@ -287,6 +291,7 @@ namespace decompiler
                                 invalidOpCodeNumBag.Add(1);
                                 invalidOpCodesBag.Add(opcode);
                             }
+                            
                             byt++; // Skip the next byte for two-byte instruction
                         }
                         else // Handle single-byte instructions
@@ -307,6 +312,11 @@ namespace decompiler
                                     byt++;
                                 }
 
+                                if (instruction.InstructionMnemonic == "SLDT" && operands.ToString().Contains("m16 0x00"))
+                                {
+                                    sldtCount++;
+                                    continue;
+                                }
                                 contentBag.Add($"{instruction.InstructionMnemonic} {operands.ToString()}\n");
                             }
                             else // Handle invalid opcodes
@@ -363,6 +373,8 @@ namespace decompiler
                 }
             }
             Content = string.Join("", contentBag); // Combine all content into the final output
+
+            log(@$"{sldtCount} counts of sldt. {Name}");
         }
 
 
@@ -377,6 +389,8 @@ namespace decompiler
                 case "r/m32":
                 case "r/m64":
                 case "r/m16/32/64":
+                case "r32/64":
+                case "r16/32/64":
                 case "r/m16/32":
                     return $"[0x{operandValue:X2}]";  // Memory address representation
 
@@ -407,8 +421,6 @@ namespace decompiler
                 case "fs":
                 case "ss":
                 case "eax":
-                case "r32/64":
-                case "r16/32/64":
                 case "rax":
                 case "rcx":
                 case "ecx":
@@ -422,11 +434,10 @@ namespace decompiler
                 case "crn":
                 case "drn":
                 case "msr":
-                    return operandType;  // Special registers and flags
+                    return $"{operandType} 0x{operandValue:X2}";  // Special registers and flags
 
                 case "mm":
                     return $"mm 0x{operandValue:X2}";  // mm register
-
                 case "mm/m64":
                     return $"mm/m64 0x{operandValue:X2}";  // mm/m64 register
 
@@ -484,7 +495,7 @@ namespace decompiler
                 case "moffs8":
                     return $"moffs8 0x{operandValue:X2}";  // 8-bit memory offset
 
-                case "CR0": 
+                case "cr0": 
                     return $"CR0 0x{operandValue:X4}"; // Control register 0
 
                 case "xmm/m64":
@@ -493,6 +504,9 @@ namespace decompiler
                 case "m32int":
                     return $"m32int 0x{operandValue:X4}";  // Memory 32-bit integer
 
+                case "3":
+                case "1":
+                    return $"{operandValue:X2}";
                 default:
                     return $"Unknown Operand Format: {operandType}, Value: 0x{operandValue:X2}";
             }
@@ -506,7 +520,7 @@ namespace decompiler
         private byte[] exeData; // loading into memory is not viable with large executables 
         private DecompileType decompileType;
         
-        private Section[] sections;
+        public peSection[] sections;
         private CodeType codeType;
         private Thread[] decompilerThreads;
         public DecompileMethod decompileMethod;
@@ -514,10 +528,88 @@ namespace decompiler
 
         public static List<DecompilerInstruction> instructionList;
         public static string filePath;
-        public static int fileChunkSize = 8192;
+        public static int fileChunkSize = 16384;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false)
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false, byte[] driverEntryPattern = null)
         {
+            if (type == DecompileType.kernelSYS)
+            {
+                if (driverEntryPattern == null)
+                    driverEntryPattern = [0x48, 0x89, 0x5C, 0x24, 0x08];
+                if (loadExeDataToMemory)
+                {
+                    byte[] driverData = File.ReadAllBytes(toDecompilePath);
+                    int index = -1;
+                    for (int i = 0; i <= driverData.Length - driverEntryPattern.Length; i++)
+                    {
+                        bool match = true;
+                        for (int j = 0; j < driverEntryPattern.Length; j++)
+                        {
+                            if (driverData[i + j] != driverEntryPattern[j])
+                            {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match)
+                        {
+                            index = i;
+                            break;
+                        }
+                    }
+                    if (index >= 0)
+                    {
+                        log($@"int __fastcall DriverEntry(_DRIVER_OBJECT *DriverObject, _UNICODE_STRING *RegistryPath) @ 0x{index:X} >> {string.Join(", ", driverEntryPattern.Select(b => $"0x{b:X2}"))}");
+                    }
+                    else
+                        throw new InvalidDriverEntryException("No DriverEntry exception");
+                } else {
+                    using (FileStream fs = new FileStream(toDecompilePath, FileMode.Open, FileAccess.Read))
+                    {
+                        int index = -1;
+                        byte[] buffer = new byte[driverEntryPattern.Length];  // Buffer to hold the chunk of data
+                        long fileLength = fs.Length;
+
+                        // Loop through the file byte by byte
+                        for (long i = 0; i <= fileLength - buffer.Length; i++)
+                        {
+                            // Set the position to read from
+                            fs.Position = i;
+
+                            // Read the next chunk of data into the buffer
+                            fs.Read(buffer, 0, buffer.Length);
+
+                            // Compare the current chunk with the driver entry pattern
+                            bool match = true;
+                            for (int j = 0; j < buffer.Length; j++)
+                            {
+                                if (buffer[j] != driverEntryPattern[j])
+                                {
+                                    match = false;
+                                    break;
+                                }
+                            }
+
+                            // If a match is found, set the index and break
+                            if (match)
+                            {
+                                index = (int)i;
+                                break;
+                            }
+                        }
+
+                        // If the pattern was found, log the result
+                        if (index >= 0)
+                        {
+                            log($@"int __fastcall DriverEntry(_DRIVER_OBJECT *DriverObject, _UNICODE_STRING *RegistryPath) @ 0x{index:X} >> {string.Join(", ", driverEntryPattern.Select(b => $"0x{b:X2}"))}");
+                        }
+                        else
+                        {
+                            throw new InvalidDriverEntryException("No DriverEntry exception");
+                        }
+                    }
+                }
+            }
             exeInstructionList = new List<object>();
             filePath = toDecompilePath;
             if (loadExeDataToMemory)
@@ -547,24 +639,21 @@ namespace decompiler
                         sections = readSections(exeData, peHeaderOffset); 
                     else
                         sections = readSectionsStream(toDecompilePath, peHeaderOffset);
-                    break;
-                case DecompileMethod.SHARP:
-                    // Determine the architecture mode or us 32-bit by default
-                    ArchitectureMode mode = ArchitectureMode.x86_32;
-                    if (cType == 0x8664) mode = ArchitectureMode.x86_64;
-                    // Configure the translator to output instruction addresses and instruction binary as hex
-                    Disassembler.Translator.IncludeAddress = true;
-                    Disassembler.Translator.IncludeBinary = true;
+                    long ct = UTCTimeAsLong;
+                    Directory.CreateDirectory(ct.ToString());
 
-                    // Create the disassembler
-                    var disasm = new Disassembler(
-                        exeData,
-                        mode, 0, true);
-                    // Disassemble each instruction and output to console. gotta map this to my Section type
+                    foreach (peSection sct in sections)
+                    {
+                        if (sct == null) continue;
+                        using (StreamWriter mn = new StreamWriter($@"{ct}\\{sct.Name}"))
+                        {
+                            mn.Write(sct.Content);
+                        }
+                    }
                     break;
             }
         }
-        private Section[] readSectionsStream(string filePath, int peHeaderOffset)
+        private peSection[] readSectionsStream(string filePath, int peHeaderOffset)
         {
             using (FileStream mainstream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             {
@@ -573,7 +662,7 @@ namespace decompiler
                 mainstream.Read(peHeader, 0, head);
 
                 int nOSections = toInt16(peHeader, peHeaderOffset + 6);
-                ConcurrentBag<Section> sectionBag = new ConcurrentBag<Section>();
+                ConcurrentBag<peSection> sectionBag = new ConcurrentBag<peSection>();
                 log($"{nOSections} section headers detected..");
                 Task[] sectionTask = new Task[nOSections];
                 for (int i = 0; i < nOSections; i++)
@@ -594,7 +683,7 @@ namespace decompiler
                         int codeSectionSize = toInt32(sBuffer, 16);
                         log($@"CodeSection offset @ 0x{codeSectionOffset} {sectionName} with a size of 0x{codeSectionSize}");
 
-                        sectionBag.Add(new Section(sectionName, codeSectionOffset, codeSectionSize)); // we pass null because its going to read from file
+                        sectionBag.Add(new peSection(sectionName, codeSectionOffset, codeSectionSize)); 
                     });
                 }
                 Task.WaitAll(sectionTask);
@@ -602,11 +691,11 @@ namespace decompiler
             }
         }
 
-        private Section[] readSections(byte[] exedata, int peHeaderOffset)
+        private peSection[] readSections(byte[] exedata, int peHeaderOffset)
         {
             int numOfSections = toInt16(exedata, peHeaderOffset + 6);
             log(numOfSections);
-            Section[] sectionList = new Section[numOfSections];
+            peSection[] sectionList = new peSection[numOfSections];
             int optHeaderSize = 0, sectionHeaderOffset;
 
             switch (codeType)
@@ -641,7 +730,7 @@ namespace decompiler
                         byte[] codeSection = new byte[codeSectionSize];
                         Array.Copy(exedata, codeSectionOffset, codeSection, 0, codeSectionSize);
                         log(@$"Machine code extracted from .text successfully.");
-                        sectionList[index] = new Section(sectionName, codeSection);
+                        sectionList[index] = new peSection(sectionName, codeSection);
                     }
                     else
                     {
@@ -655,7 +744,7 @@ namespace decompiler
             return sectionList;
         }
 
-        public Section getSection(string name) => sections.Where<Section>(i => i.Name == name).ToList()[0];
+        public peSection getSection(string name) => sections.Where<peSection>(i => i.Name == name).ToList()[0];
 
         public static void downloadCodeRules(CodeType codeType) // i just absolutely despise html 
         {

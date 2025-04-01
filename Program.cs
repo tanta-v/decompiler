@@ -11,8 +11,7 @@ namespace decompiler
         static void Main(string[] args)
         {
             log("Hello, World!");
-            Decompiler compt=new Decompiler($"C:\\Users\\200123\\Documents\\GitHub\\networker\\bin\\Debug\\net8.0\\networker.exe");
-            log(compt.getSection(".text").Content);
+            Decompiler compt = new Decompiler($"HEVD.sys");
         }
     }
 }

@@ -16,6 +16,16 @@ namespace decompiler.Exceptions
     }
 
     [Serializable]
+    public class InvalidDriverEntryException : Exception
+    {
+        public InvalidDriverEntryException() { }
+        public InvalidDriverEntryException(string message) : base(message) { }
+        public InvalidDriverEntryException(string message, Exception inner) : base(message, inner) { }
+        protected InvalidDriverEntryException(
+          System.Runtime.Serialization.SerializationInfo info,
+          System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
+    }
+    [Serializable]
     public class SectionReaderException : Exception
     {
         public SectionReaderException() { }
