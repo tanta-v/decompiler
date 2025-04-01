@@ -52,7 +52,11 @@ namespace decompiler
             convertBytesToReadable(content!);
             
         }
-
+        public Section(string name, string content)
+        {
+            Name = name;
+            Content = content;
+        }
         private void convertBytesToReadable(byte[] sect)
         {
             var contentBag = new ConcurrentBag<string>();
@@ -557,8 +561,6 @@ namespace decompiler
                         exeData,
                         mode, 0, true);
                     // Disassemble each instruction and output to console. gotta map this to my Section type
-                    foreach (var insn in disasm.Disassemble())
-                        log(insn.ToString());
                     break;
             }
         }
