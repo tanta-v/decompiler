@@ -1,23 +1,22 @@
 ﻿using decompiler.Exceptions;
-using System;
-using System.IO;
 using System.Text;
 using static decompiler.Utility;
 using Newtonsoft.Json;
-using System.Reflection;
-using System.Net.Http;
 using decompiler.DecompilerRules;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using System.Collections.Concurrent;
-using System.Reflection.Emit;
-using System.Xml.Linq;
 namespace decompiler
 {
     public enum DecompileType
     {
         ASM,
         kernelSYS
+    }
+    public enum RecompilationType
+    {
+        RAW = 0, // Raw. No real formatting applied, just direct byte-opcode translations.
+        RAWSIMPLE = 1 // Simple. Some very limited formatting applied. For example, maps the application's start point and all functions.
     }
     public enum DecompileMethod
     {
@@ -235,6 +234,7 @@ namespace decompiler
             using (FileStream OStrm = new(filePath, FileMode.Open, FileAccess.Read))
             {
                 int nOChunks = codeSize / fileChunkSize;
+                log($"{nOChunks} chunks @ {Name} >> {codeSize}");
                 OStrm.Seek(codeSectionOffset, SeekOrigin.Begin);
 
                 byte[] chunkBuffer = new byte[fileChunkSize * 2]; // Double-sized buffer: [chunk1][chunk2]
@@ -244,24 +244,27 @@ namespace decompiler
                 
                 while (currentChunk < nOChunks)
                 {
-                    try { OStrm.Read(chunkR, currentChunk * fileChunkSize, fileChunkSize); }
+                    try {
+                        OStrm.Read(chunkR, 0, fileChunkSize);
+                    }
                     catch (Exception e) { break; }
 
                     if (currentChunkOffset == 0) // Starting fresh with the first chunk
                     {
                         Array.Copy(chunkR, 0, chunkBuffer, currentChunkOffset, fileChunkSize);
                         currentChunkOffset = fileChunkSize; // Update offset
+
                     }
                     else // Shift the content of chunkBuffer left by fileChunkSize
                     {
                         Array.Copy(chunkBuffer, fileChunkSize, chunkBuffer, 0, fileChunkSize);
                         Array.Copy(chunkR, 0, chunkBuffer, fileChunkSize, fileChunkSize);
+
                     }
 
-                    for (int byt = 0; byt < chunkBuffer.Length; byt++) // Process bytes in chunkBuffer
+                    for (int byt = 0; byt < chunkR.Length; byt++) // Process bytes in chunkBuffer
                     {
                         byte opcode = chunkBuffer[byt];
-
                         if (opcode == 0x0F && byt + 1 < chunkBuffer.Length) // Two-byte instruction check
                         {
                             byte nextOpcode = chunkBuffer[byt + 1];
@@ -283,7 +286,7 @@ namespace decompiler
                                     byt++;
                                 }
 
-                                contentBag.Add($"{instruction.InstructionMnemonic} {operands.ToString()}\n");
+                                contentBag.Add($"{currentChunk * fileChunkSize}+{byt}: {instruction.InstructionMnemonic} {operands}\n");
                             }
                             else // Handle invalid opcode
                             {
@@ -317,7 +320,7 @@ namespace decompiler
                                     sldtCount++;
                                     continue;
                                 }
-                                contentBag.Add($"{instruction.InstructionMnemonic} {operands.ToString()}\n");
+                                contentBag.Add($"{currentChunk * fileChunkSize}+{byt}: {instruction.InstructionMnemonic} {operands}\n");
                             }
                             else // Handle invalid opcodes
                             {
@@ -369,12 +372,11 @@ namespace decompiler
                         }
                     }
 
-                    currentChunk++; // Move to the next chunk
+                    currentChunk++; 
                 }
             }
             Content = string.Join("", contentBag); // Combine all content into the final output
 
-            log(@$"{sldtCount} counts of sldt. {Name}");
         }
 
 
@@ -503,7 +505,6 @@ namespace decompiler
 
                 case "m32int":
                     return $"m32int 0x{operandValue:X4}";  // Memory 32-bit integer
-
                 case "3":
                 case "1":
                     return $"{operandValue:X2}";
@@ -512,15 +513,13 @@ namespace decompiler
             }
 
         }
-
-
     }
     public class Decompiler
     {
         private byte[] exeData; // loading into memory is not viable with large executables 
         private DecompileType decompileType;
         
-        public peSection[] sections;
+        public peSection[] rawSections;
         private CodeType codeType;
         private Thread[] decompilerThreads;
         public DecompileMethod decompileMethod;
@@ -528,9 +527,9 @@ namespace decompiler
 
         public static List<DecompilerInstruction> instructionList;
         public static string filePath;
-        public static int maxFileChunkSize = 8192;
+        public static int maxFileChunkSize = 512;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false, byte[] driverEntryPattern = null)
+        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, RecompilationType recompilationMethod = RecompilationType.RAW, bool loadExeDataToMemory = false, byte[] driverEntryPattern = null)
         {
             if (type == DecompileType.kernelSYS)
             {
@@ -567,19 +566,12 @@ namespace decompiler
                     using (FileStream fs = new FileStream(toDecompilePath, FileMode.Open, FileAccess.Read))
                     {
                         int index = -1;
-                        byte[] buffer = new byte[driverEntryPattern.Length];  // Buffer to hold the chunk of data
+                        byte[] buffer = new byte[driverEntryPattern.Length];
                         long fileLength = fs.Length;
-
-                        // Loop through the file byte by byte
                         for (long i = 0; i <= fileLength - buffer.Length; i++)
                         {
-                            // Set the position to read from
                             fs.Position = i;
-
-                            // Read the next chunk of data into the buffer
                             fs.Read(buffer, 0, buffer.Length);
-
-                            // Compare the current chunk with the driver entry pattern
                             bool match = true;
                             for (int j = 0; j < buffer.Length; j++)
                             {
@@ -589,16 +581,12 @@ namespace decompiler
                                     break;
                                 }
                             }
-
-                            // If a match is found, set the index and break
                             if (match)
                             {
                                 index = (int)i;
                                 break;
                             }
                         }
-
-                        // If the pattern was found, log the result
                         if (index >= 0)
                         {
                             log($@"int __fastcall DriverEntry(_DRIVER_OBJECT *DriverObject, _UNICODE_STRING *RegistryPath) @ 0x{index:X} >> {string.Join(", ", driverEntryPattern.Select(b => $"0x{b:X2}"))}");
@@ -636,24 +624,32 @@ namespace decompiler
                 case DecompileMethod.NATIVE: // Faster, less consistent.
                     downloadCodeRules(codeType); // ensures code decompiler actually has access to the byte = mnemonic conversion that this app is designed to run
                     if (loadExeDataToMemory) 
-                        sections = readSections(exeData, peHeaderOffset); 
+                        rawSections = readRawSections(exeData, peHeaderOffset); 
                     else
-                        sections = readSectionsStream(toDecompilePath, peHeaderOffset);
-                    long ct = UTCTimeAsLong;
-                    Directory.CreateDirectory(ct.ToString());
-
-                    foreach (peSection sct in sections)
-                    {
-                        if (sct == null) continue;
-                        using (StreamWriter mn = new StreamWriter($@"{ct}\\{sct.Name}"))
-                        {
-                            mn.Write(sct.Content);
-                        }
-                    }
+                        rawSections = readRawSectionsStream(toDecompilePath, peHeaderOffset);
                     break;
             }
+            long ct = UTCTimeAsLong;
+            Directory.CreateDirectory($@"{ct.ToString()}");
+            Directory.CreateDirectory($@"{ct.ToString()}\\raw");
+            foreach (peSection sct in rawSections)
+            {
+                if (sct == null) continue;
+                using StreamWriter mn = new StreamWriter($@"{ct.ToString()}\\raw\\{sct.Name}");
+                mn.Write(sct.Content);
+
+                switch (recompilationMethod)
+                {
+                    case RecompilationType.RAWSIMPLE:
+
+                        break;
+                    case RecompilationType.RAW:
+                    default:
+                        break;
+                }
+            }
         }
-        private peSection[] readSectionsStream(string filePath, int peHeaderOffset)
+        private peSection[] readRawSectionsStream(string filePath, int peHeaderOffset)
         {
             using (FileStream mainstream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             {
@@ -691,7 +687,7 @@ namespace decompiler
             }
         }
 
-        private peSection[] readSections(byte[] exedata, int peHeaderOffset)
+        private peSection[] readRawSections(byte[] exedata, int peHeaderOffset)
         {
             int numOfSections = toInt16(exedata, peHeaderOffset + 6);
             log(numOfSections);
@@ -744,7 +740,7 @@ namespace decompiler
             return sectionList;
         }
 
-        public peSection getSection(string name) => sections.Where<peSection>(i => i.Name == name).ToList()[0];
+        public peSection getRawSection(string name) => rawSections.Where(i => i.Name == name).ToList()[0];
 
         public static void downloadCodeRules(CodeType codeType) // i just absolutely despise html 
         {

@@ -11,8 +11,7 @@ namespace decompiler
         static void Main(string[] args)
         {
             log("Hello, World!");
-            Decompiler compt = new Decompiler($"HEVD.sys");
-            log(compt.getSection(".rdata").Content);
+            Decompiler compt = new Decompiler($"HEVD.sys", type: DecompileType.kernelSYS, recompilationMethod: RecompilationType.RAWSIMPLE);
         }
     }
 }
