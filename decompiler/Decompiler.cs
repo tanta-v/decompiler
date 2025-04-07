@@ -228,7 +228,7 @@ namespace decompiler
             StringBuilder asciiBuilder = new StringBuilder(); // Builds ASCII strings
             StringBuilder unicodeBuilder = new StringBuilder(); // Builds Unicode strings
 
-            int fileChunkSize = Decompiler.fileChunkSize;
+            int fileChunkSize = (codeSize < Decompiler.maxFileChunkSize) ? codeSize : Decompiler.maxFileChunkSize;
             if (codeSectionOffset == 0) throw new SectionReaderException("Invalid section-code offset.");
             if (codeSize == 0) throw new SectionReaderException("Invalid section-code size.");
             int sldtCount = 0;
@@ -528,7 +528,7 @@ namespace decompiler
 
         public static List<DecompilerInstruction> instructionList;
         public static string filePath;
-        public static int fileChunkSize = 16384;
+        public static int maxFileChunkSize = 8192;
         //public static DecompilerRuleHandler rLoader;
         public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, bool loadExeDataToMemory = false, byte[] driverEntryPattern = null)
         {

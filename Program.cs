@@ -12,6 +12,7 @@ namespace decompiler
         {
             log("Hello, World!");
             Decompiler compt = new Decompiler($"HEVD.sys");
+            log(compt.getSection(".rdata").Content);
         }
     }
 }
