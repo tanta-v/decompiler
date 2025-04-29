@@ -1,11 +1,12 @@
-﻿using decompiler.Exceptions;
-using System.Text;
-using static decompiler.Utility;
-using Newtonsoft.Json;
-using decompiler.DecompilerRules;
-using System.Text.RegularExpressions;
+﻿using decompiler.DecompilerRules;
+using decompiler.Exceptions;
 using HtmlAgilityPack;
+using Newtonsoft.Json;
 using System.Collections.Concurrent;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using static decompiler.Utility;
 namespace decompiler
 {
     public enum DecompileType
@@ -33,18 +34,21 @@ namespace decompiler
         public string Content;
         public int invalidOpCodeNum;
         public List<byte> invalidOpCodes;
+        public List<DecompilerInstruction> decompiledInstructions;
         public peSection(string name, int codeSectionOffset = 0, int codeSize = 0)
         {
             Name = name;
             invalidOpCodes = new List<byte>();
             invalidOpCodeNum = 0;
             Content = string.Empty;
+            decompiledInstructions = new List<DecompilerInstruction>();
             convertBytesToReadableStream(Decompiler.filePath, codeSectionOffset, codeSize);
         }
         public peSection(string name, byte[] content)
         {
             Name = name;
             invalidOpCodes = new List<byte>();
+            decompiledInstructions = new List<DecompilerInstruction>();
             invalidOpCodeNum = 0;
             Content = string.Empty;
             convertBytesToReadable(content!);
@@ -107,7 +111,7 @@ namespace decompiler
                         }
                         else // Handle invalid two-byte opcode
                         {
-                            string invalidText = $"DB 0x{opcode:X2}{nextOpcode:X2}\n";
+                            string invalidText = $"UNK 0x{opcode:X2}{nextOpcode:X2}\n";
                             contentBag.Add(invalidText);
                             log(invalidText);
 
@@ -148,7 +152,7 @@ namespace decompiler
                         }
                         else // Handle invalid single-byte opcode
                         {
-                            string invalidText = $"DB 0x{opcode:X2}\n";
+                            string invalidText = $"UNK 0x{opcode:X2}\n";
                             contentBag.Add(invalidText);
                             log(invalidText);
 
@@ -247,37 +251,38 @@ namespace decompiler
                     try {
                         OStrm.Read(chunkR, 0, fileChunkSize);
                     }
-                    catch (Exception e) { break; }
+                    catch (Exception) { break; }
 
                     if (currentChunkOffset == 0) // Starting fresh with the first chunk
                     {
                         Array.Copy(chunkR, 0, chunkBuffer, currentChunkOffset, fileChunkSize);
-                        currentChunkOffset = fileChunkSize; // Update offset
-
                     }
                     else // Shift the content of chunkBuffer left by fileChunkSize
                     {
                         Array.Copy(chunkBuffer, fileChunkSize, chunkBuffer, 0, fileChunkSize);
                         Array.Copy(chunkR, 0, chunkBuffer, fileChunkSize, fileChunkSize);
-
                     }
-
-                    for (int byt = 0; byt < chunkR.Length; byt++) // Process bytes in chunkBuffer
+                    for (int byt = 0; byt < chunkR.Length; byt++) // Process instructions
                     {
+                        DecompilerInstruction? instruction;
                         byte opcode = chunkBuffer[byt];
+                        int byts = byt;
                         if (opcode == 0x0F && byt + 1 < chunkBuffer.Length) // Two-byte instruction check
                         {
                             byte nextOpcode = chunkBuffer[byt + 1];
                             string combinedOpcode = $"{opcode:X2}{nextOpcode:X2}";
-                            DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == combinedOpcode);
-
+                            instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == combinedOpcode);
+                            
                             if (instruction != null)
                             {
+                                instruction.chunk = currentChunk;
+                                instruction.chunkOffset = byt;
                                 StringBuilder operands = new StringBuilder();
                                 if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 2 < chunkBuffer.Length)
                                 {
                                     operands.Append(FormatOperand(instruction.Operand1, chunkBuffer[byt + 2], byt));
                                     byt++;
+                                    
                                 }
                                 if (!string.IsNullOrEmpty(instruction.Operand2) && byt + 2 < chunkBuffer.Length)
                                 {
@@ -290,18 +295,20 @@ namespace decompiler
                             }
                             else // Handle invalid opcode
                             {
-                                contentBag.Add($"DB 0x{opcode:X2}{nextOpcode:X2}\n");
+                                contentBag.Add($"UNK 0x{opcode:X2}{nextOpcode:X2}\n");
                                 invalidOpCodeNumBag.Add(1);
                                 invalidOpCodesBag.Add(opcode);
                             }
-                            
                             byt++; // Skip the next byte for two-byte instruction
                         }
                         else // Handle single-byte instructions
                         {
-                            DecompilerInstruction? instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == opcode.ToString("X2"));
+                            instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == opcode.ToString("X2"));
+
                             if (instruction != null)
                             {
+                                instruction.chunk = currentChunk;
+                                instruction.chunkOffset = byt;
                                 StringBuilder operands = new StringBuilder();
                                 if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 1 < chunkBuffer.Length)
                                 {
@@ -321,10 +328,11 @@ namespace decompiler
                                     continue;
                                 }
                                 contentBag.Add($"{currentChunk * fileChunkSize}+{byt}: {instruction.InstructionMnemonic} {operands}\n");
+                                
                             }
                             else // Handle invalid opcodes
                             {
-                                contentBag.Add($"DB 0x{opcode:X2}\n");
+                                contentBag.Add($"UNK 0x{opcode:X2}\n");
                                 invalidOpCodeNumBag.Add(1);
                                 invalidOpCodesBag.Add(opcode);
                             }
@@ -338,7 +346,6 @@ namespace decompiler
                             byt++;
                             if (nextInstruction != null) isInstruction = true;
                         }
-
                         // ASCII and Unicode string extraction logic
                         if (!isInstruction)
                         {
@@ -370,6 +377,12 @@ namespace decompiler
                                 unicodeBuilder.Clear();
                             }
                         }
+                        if (instruction != null)
+                        {
+                            instruction.rawBytes = chunkR.Skip(byts).Take(byt - byts).ToArray();
+                        }
+                        
+                        decompiledInstructions.Add(instruction);
                     }
 
                     currentChunk++; 
@@ -379,7 +392,20 @@ namespace decompiler
 
         }
 
-
+        public string? formatContent(RecompilationType rtype)
+        {
+            StringBuilder fcontent = new StringBuilder();
+            switch (rtype)
+            {
+                case RecompilationType.RAWSIMPLE:
+                    
+                    break;
+                case RecompilationType.RAW:
+                default:
+                    break;
+            }
+            return fcontent.ToString();
+        }
 
         private string FormatOperand(string operandType, ushort operandValue, int currentIndex)
         {
@@ -529,7 +555,7 @@ namespace decompiler
         public static string filePath;
         public static int maxFileChunkSize = 512;
         //public static DecompilerRuleHandler rLoader;
-        public Decompiler(string toDecompilePath, string ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, RecompilationType recompilationMethod = RecompilationType.RAW, bool loadExeDataToMemory = false, byte[] driverEntryPattern = null)
+        public Decompiler(string toDecompilePath, string? ruleLocPath = null, DecompileType type = DecompileType.ASM, DecompileMethod method = DecompileMethod.NATIVE, RecompilationType recompilationMethod = RecompilationType.RAW, bool loadExeDataToMemory = false, byte[]? driverEntryPattern = null)
         {
             if (type == DecompileType.kernelSYS)
             {
@@ -630,22 +656,21 @@ namespace decompiler
                     break;
             }
             long ct = UTCTimeAsLong;
-            Directory.CreateDirectory($@"{ct.ToString()}");
-            Directory.CreateDirectory($@"{ct.ToString()}\\raw");
+            Directory.CreateDirectory($@"{ct}");
+            Directory.CreateDirectory($@"{ct}\\raw");
             foreach (peSection sct in rawSections)
             {
                 if (sct == null) continue;
-                using StreamWriter mn = new StreamWriter($@"{ct.ToString()}\\raw\\{sct.Name}");
-                mn.Write(sct.Content);
-
-                switch (recompilationMethod)
+                using StreamWriter mn = new StreamWriter($@"{ct}\\raw\\{sct.Name}");
+                mn.Write(sct.Content); 
+                string formatted = sct.formatContent(recompilationMethod);
+                if (recompilationMethod != RecompilationType.RAW)
                 {
-                    case RecompilationType.RAWSIMPLE:
-
-                        break;
-                    case RecompilationType.RAW:
-                    default:
-                        break;
+                    Directory.CreateDirectory($@"{ct}\\formatted");
+                    using (StreamWriter swfmt = new($@"{ct}\\formatted\\{sct.Name}"))
+                    {
+                        swfmt.Write(formatted);
+                    }
                 }
             }
         }

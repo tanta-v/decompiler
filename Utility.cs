@@ -13,13 +13,12 @@ namespace decompiler
         public static int toInt32(byte[] value, int offset) => BitConverter.ToInt32(value, offset);
         public static ushort toUInt16(byte[] value, int offset) => BitConverter.ToUInt16(value, offset);
         public static short toInt16(byte[] value, int offset) => BitConverter.ToInt16(value, offset);
+        public static byte toHex(int value) => Convert.ToByte(value);
         public static string getString(byte[] value) => Encoding.UTF8.GetString(value);
         public static string getStringAscii(byte[] value) => Encoding.UTF8.GetString(value);
         public static string getString(byte[] value, int offset, int count) => Encoding.UTF8.GetString(value, offset, count);
         public static string getStringAscii(byte[] value, int offset, int count) => Encoding.ASCII.GetString(value, offset, count);
-        public static byte[] getBytesUTF8(string text)
-        {
-            return Encoding.UTF8.GetBytes(text);
-        }
+        public static byte[] getBytesUTF8(string text) => Encoding.UTF8.GetBytes(text);
+        
     }
 }
