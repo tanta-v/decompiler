@@ -4,6 +4,7 @@ using HtmlAgilityPack;
 using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using static decompiler.Utility;
@@ -267,76 +268,53 @@ namespace decompiler
                         DecompilerInstruction? instruction;
                         byte opcode = chunkBuffer[byt];
                         int byts = byt;
-                        if (opcode == 0x0F && byt + 1 < chunkBuffer.Length) // Two-byte instruction check
+                        bool isTwoByte = opcode == 0x0F && byt + 1 < chunkBuffer.Length;
+                        string opcodeKey = isTwoByte ? $"{opcode:X2}{chunkBuffer[byt + 1]:X2}" : opcode.ToString("X2");
+
+                        instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == opcodeKey);
+
+                        if (instruction != null)
                         {
-                            byte nextOpcode = chunkBuffer[byt + 1];
-                            string combinedOpcode = $"{opcode:X2}{nextOpcode:X2}";
-                            instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == combinedOpcode);
-                            
-                            if (instruction != null)
+                            instruction.chunk = currentChunk;
+                            instruction.chunkOffset = byt;
+
+                            int operandOffset = byt + (isTwoByte ? 2 : 1);
+                            StringBuilder operands = new();
+
+                            void AppendOperand(string operandDef)
                             {
-                                instruction.chunk = currentChunk;
-                                instruction.chunkOffset = byt;
-                                StringBuilder operands = new StringBuilder();
-                                if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 2 < chunkBuffer.Length)
-                                {
-                                    operands.Append(FormatOperand(instruction.Operand1, chunkBuffer[byt + 2], byt));
-                                    byt++;
-                                    
-                                }
-                                if (!string.IsNullOrEmpty(instruction.Operand2) && byt + 2 < chunkBuffer.Length)
+                                if (!string.IsNullOrEmpty(operandDef) && operandOffset < chunkBuffer.Length)
                                 {
                                     if (operands.Length > 0) operands.Append(", ");
-                                    operands.Append(FormatOperand(instruction.Operand2, chunkBuffer[byt + 2], byt));
-                                    byt++;
+                                    operands.Append(FormatOperand(operandDef, chunkBuffer[operandOffset], byt));
+                                    operandOffset++;
                                 }
+                            }
 
-                                contentBag.Add($"{currentChunk * fileChunkSize}+{byt}: {instruction.InstructionMnemonic} {operands}\n");
-                            }
-                            else // Handle invalid opcode
+                            AppendOperand(instruction.Operand1);
+                            AppendOperand(instruction.Operand2);
+                            AppendOperand(instruction.Operand3);
+                            AppendOperand(instruction.Operand4);
+
+                            if (!isTwoByte && instruction.InstructionMnemonic == "SLDT" && operands.ToString().Contains("m16 0x00"))
                             {
-                                contentBag.Add($"UNK 0x{opcode:X2}{nextOpcode:X2}\n");
-                                invalidOpCodeNumBag.Add(1);
-                                invalidOpCodesBag.Add(opcode);
+                                sldtCount++;
+                                continue;
                             }
-                            byt++; // Skip the next byte for two-byte instruction
+
+                            contentBag.Add($"{currentChunk * fileChunkSize}+{operandOffset - 1}: {instruction.InstructionMnemonic} {operands}\n");
+                            instruction.operandValues = operands.ToString().Split(", ");
                         }
-                        else // Handle single-byte instructions
+                        else
                         {
-                            instruction = Decompiler.instructionList.FirstOrDefault(inst => inst.PrimaryOpcode == opcode.ToString("X2"));
-
-                            if (instruction != null)
-                            {
-                                instruction.chunk = currentChunk;
-                                instruction.chunkOffset = byt;
-                                StringBuilder operands = new StringBuilder();
-                                if (!string.IsNullOrEmpty(instruction.Operand1) && byt + 1 < chunkBuffer.Length)
-                                {
-                                    operands.Append(FormatOperand(instruction.Operand1, chunkBuffer[byt + 1], byt));
-                                    byt++;
-                                }
-                                if (!string.IsNullOrEmpty(instruction.Operand2) && byt + 1 < chunkBuffer.Length)
-                                {
-                                    if (operands.Length > 0) operands.Append(", ");
-                                    operands.Append(FormatOperand(instruction.Operand2, chunkBuffer[byt + 1], byt));
-                                    byt++;
-                                }
-
-                                if (instruction.InstructionMnemonic == "SLDT" && operands.ToString().Contains("m16 0x00"))
-                                {
-                                    sldtCount++;
-                                    continue;
-                                }
-                                contentBag.Add($"{currentChunk * fileChunkSize}+{byt}: {instruction.InstructionMnemonic} {operands}\n");
-                                
-                            }
-                            else // Handle invalid opcodes
-                            {
-                                contentBag.Add($"UNK 0x{opcode:X2}\n");
-                                invalidOpCodeNumBag.Add(1);
-                                invalidOpCodesBag.Add(opcode);
-                            }
+                            string unknown = isTwoByte ? $"0x{opcode:X2}{chunkBuffer[byt + 1]:X2}" : $"0x{opcode:X2}";
+                            contentBag.Add($"UNK {unknown}\n");
+                            invalidOpCodeNumBag.Add(1);
+                            invalidOpCodesBag.Add(opcode);
                         }
+
+                        byt += isTwoByte ? 2 : 1;
+
 
                         bool isInstruction = false;
                         if (byt + 1 < chunkBuffer.Length)
@@ -377,29 +355,45 @@ namespace decompiler
                                 unicodeBuilder.Clear();
                             }
                         }
-                        if (instruction != null)
+                        if (instruction != null && !(instruction.InstructionMnemonic == "SLDT" && instruction.operandValues[0].Contains("m16 0x00")))
                         {
                             instruction.rawBytes = chunkR.Skip(byts).Take(byt - byts).ToArray();
+                            decompiledInstructions.Add(instruction);
                         }
-                        
-                        decompiledInstructions.Add(instruction);
                     }
-
                     currentChunk++; 
                 }
             }
             Content = string.Join("", contentBag); // Combine all content into the final output
 
         }
+        private string? formatRawSimple()
+        {
+            StringBuilder functions = new();
+            foreach (DecompilerInstruction instruction in decompiledInstructions)
+            { 
+                if (instruction == null) throw new ReformatException("Instruction was null.");
+                switch (instruction.InstructionMnemonic)
+                {
+                    case "SYSCALL":
+                    case "CALL":
+                    case "JMP":
 
+                        log(instruction);
+                        functions.Append($"FUNCTION ({instruction.InstructionMnemonic}) > {instruction.operandValues[0]}\n");
+                        continue;
+                }
+            }
+
+            return functions.ToString();
+        }
         public string? formatContent(RecompilationType rtype)
         {
             StringBuilder fcontent = new StringBuilder();
             switch (rtype)
             {
                 case RecompilationType.RAWSIMPLE:
-                    
-                    break;
+                    return formatRawSimple();
                 case RecompilationType.RAW:
                 default:
                     break;
@@ -673,6 +667,7 @@ namespace decompiler
                     }
                 }
             }
+            return;
         }
         private peSection[] readRawSectionsStream(string filePath, int peHeaderOffset)
         {

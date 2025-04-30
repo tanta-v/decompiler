@@ -69,9 +69,7 @@ namespace decompiler.DecompilerRules
             operandValues = [];
             rawBytes = [];
         }
-        public override string ToString()
-        {
-            return $"{chunk} + {chunkOffset}: {getString(rawBytes)} > {InstructionMnemonic} {operandValues[0]} {operandValues[1]}";
-        }
+        public static implicit operator string(DecompilerInstruction obj) => obj.ToString();
+        public override string ToString() => $"{chunk} + {chunkOffset}: {getString(rawBytes)} > {InstructionMnemonic} {operandValues[0]}{(operandValues[1] == null ? "" : ",")} {operandValues[1]}{(operandValues[2] == null ? "" : ",")} {operandValues[2]}{(operandValues[3] == null ? "" : ",")} {operandValues[3]}";
     }
 }

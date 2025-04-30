@@ -47,4 +47,15 @@ namespace decompiler.Exceptions
           System.Runtime.Serialization.SerializationInfo info,
           System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
     }
+
+    [Serializable]
+    public class ReformatException : Exception
+    {
+        public ReformatException() { }
+        public ReformatException(string message) : base(message) { }
+        public ReformatException(string message, Exception inner) : base(message, inner) { }
+        protected ReformatException(
+          System.Runtime.Serialization.SerializationInfo info,
+          System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
+    }
 }
